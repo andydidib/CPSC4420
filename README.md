@@ -1,67 +1,109 @@
 # Quadrotor UAV Simulator (Unreal Engine 5)
 
-A controllable quadrotor drone built in Unreal Engine 5 with Blueprints. It has a flight controller, environment collision, an onboard RGB camera, a telemetry HUD, waypoint autopilot, RRT path planning, LiDAR, and multi-camera (multimodal) image capture.
+CPSC 4420, Team 9_2: Andy D. Botkin, Damian M. Giannaccini, Syd Richardson
+
+This is a quadrotor drone we built in Unreal Engine 5 using Blueprints. You can fly it with the keyboard, and it also has a waypoint autopilot, RRT path planning, a LiDAR sensor, an onboard camera with a telemetry HUD, and RGB/depth/normal image capture.
+
+## Running the project
+
+### What you need
+
+- Unreal Engine 5.8 (install it from the Epic Games Launcher)
+- Git, to clone the repo
+- Python 3, only if you want to run the data scripts
+
+### Steps
+
+1. Clone the repo:
+   ```
+   git clone https://github.com/andydidib/CPSC4420.git
+   ```
+   If the files come down as small text pointers instead of real assets, the repo uses Git LFS. Run `git lfs install` and then `git lfs pull` inside the folder.
+2. Open the folder and double-click the `.uproject` file. If Unreal asks which engine version to use, pick 5.8.
+3. The first launch takes a while because Unreal compiles shaders. Let it finish.
+4. If it says some plugins are missing or disabled, go to Edit → Plugins, enable them, and restart the editor.
+5. Open the level from the Content Browser (or File → Open Level). Use `<MapName>` for the main demo.
+6. Press Play (the green arrow at the top, or Alt+P). Click inside the game window so it gets keyboard input.
+7. Press T to take off, then fly around with the controls below.
+
+If the game runs slowly, try lowering Settings → Engine Scalability Settings to Medium, or play as a Standalone Game from the Play dropdown.
 
 ## Controls
 
 | Key | Action |
 |---|---|
-| **T** | Take off |
-| **G** | Land |
-| **W / S** | Forward / backward |
-| **A / D** | Left / right |
-| **E / Q** | Up / down (E also lifts off from the ground) |
-| **Left / Right Arrow** | Yaw (turn) |
-| **P** | Start the waypoint autopilot; press again to cancel |
-| **O** | Plan a path to the goal with RRT and fly it |
-| **R** | Reset the drone to its spawn point |
-| **F** | Capture one frame from all sensor cameras |
+| T | Take off |
+| G | Land |
+| W / S | Forward / backward |
+| A / D | Left / right |
+| E / Q | Up / down (E also lifts off from the ground) |
+| Left / Right Arrow | Turn (yaw) |
+| P | Start the waypoint autopilot, press again to cancel |
+| O | Plan a path to the goal with RRT and fly it |
+| R | Reset the drone to where it spawned |
+| F | Capture one frame from all the sensor cameras |
 
-Movement and yaw only work while the drone is in the air. P and O take off automatically if the drone is on the ground. The LiDAR scans automatically.
+You can only move and turn while the drone is in the air. P and O will take off on their own if the drone is on the ground. The LiDAR scans on its own while you play.
 
-## Implementation
+## How it works
 
-**Drone (`BP_DronePawn`)**
-The drone is a Pawn with a box collider as its root, so collision fits the drone's shape. Only the box collides with the world; the drone mesh has no collision. A `FloatingPawnMovement` component handles flight, with no gravity and braking that brings the drone to a stable hover when no keys are pressed.
+### The drone (BP_DronePawn)
 
-**Flight controller**
-- **Shared controls:** `ApplyHorizontal`, `ApplyVertical` and `ApplyYaw` move the drone. The keyboard and the autopilot both use these functions, so autopilot flight behaves like piloted flight.
-- **Takeoff:** a 2-second Timeline smoothly lifts the drone to a hover and starts the rotor animation (`StartTakeoff` event).
-- **Landing:** the drone descends gently until `Event Hit` detects a flat surface below it while it is landing or moving down, then it is marked as landed and the rotors stop (`StartLanding` event). Flying into a slope does not count as landing.
-- **State:** `IsFlying` and `IsLanding` track the flight state and block movement on the ground.
-- **Reset:** R cancels any mission, stops movement and teleports the drone back to the transform saved at BeginPlay.
+The drone is a Pawn with a box collider as its root, so the collision matches the drone's shape. Only the box hits things; the drone mesh itself has no collision. Movement comes from a FloatingPawnMovement component with gravity turned off. When you let go of the keys, braking slows it down to a hover.
 
-**Tilt**
-The visible model sits on a separate pivot that pitches and rolls based on the control inputs, smoothed with `FInterp To`. The collision box stays level, so tilting never affects collisions.
+### Flight controls
 
-**Onboard RGB camera and telemetry HUD**
-A Scene Capture 2D at the drone's nose renders a live feed into a Render Target shown in the top-right of the HUD. The HUD also shows X/Y/Z position (m), pitch/roll/yaw (degrees), speed (m/s) and the current camera view.
+ApplyHorizontal, ApplyVertical and ApplyYaw are the functions that actually move the drone. The keyboard and the autopilot both call them, so the drone flies the same way whether you're flying it or the autopilot is.
 
-**Waypoint autopilot (P)**
-`BP_Waypoint` actors are placed in the level with an Index (order) and Label. The autopilot loads them, then for each waypoint it works out where the waypoint is relative to the drone and sets the yaw, forward, sideways and vertical inputs with `Map Range Clamped`: it turns to face the waypoint, flies toward it, slows down as it gets close, hovers for the waypoint's `HoverDuration`, and lands after the last one. Waypoints can show a ring the drone flies through.
+Takeoff (StartTakeoff) uses a 2-second Timeline to lift the drone up to a hover and start the rotors spinning.
 
-**Position log**
-During a mission, `LogPosition` writes `POSLOG,time,waypoint,x,y,z` (meters) to the log every 0.5 s and at each waypoint.
+Landing (StartLanding) lowers the drone slowly until Event Hit picks up a flat surface underneath it. At that point it counts as landed and the rotors stop. Bumping into a slope doesn't count as a landing.
 
-**RRT path planning (O)**
-- `BuildTree` grows a Rapidly-exploring Random Tree from the drone toward `BP_Goal`: it samples random points (sometimes the goal itself), steps from the nearest tree node (`FindNearest`), and keeps the step only if a sphere trace the size of the drone is clear (`IsPathClear`). It stops when a node can see the goal. Up to 5 attempts are made.
-- `ExtractPath` follows the parent links back from the goal to get the path; `SmoothPath` removes unneeded turns by skipping to the farthest point with a clear line.
-- `BuildPathWaypoints` spawns hidden waypoints along the smoothed path and the autopilot flies them.
-- Debug lines: green = tree, red = raw path, blue = smoothed path.
+IsFlying and IsLanding keep track of the flight state, and they stop the drone from moving while it's on the ground.
 
-**LiDAR (`BP_Lidar`)**
-A component on the drone that scans every 0.1 s (timer). Each scan casts 16 vertical channels × 90 horizontal steps (4° apart, full 360°) of line traces out to 50 m, draws the hits as red points and stores them in `ScanPoints`. Every 10th scan, the scan number, drone position, rotation and all hit points are written to the log in one line.
+Pressing R cancels any mission, stops the drone, and teleports it back to the spot it started at (saved on BeginPlay).
 
-**Multimodal capture (F)**
-A `SensorRig` on the drone's nose holds three Scene Capture cameras at the exact same position and field of view: RGB (`Cam_RGB`), depth (`Cam_Depth`, distance in cm) and surface normals (`Cam_Normal`). They only capture when F is pressed: `CaptureFrame` captures all three in the same frame and saves them with the same frame number to `Saved/Captures/` (`frame_N_rgb.png`, `frame_N_depth.hdr`, `frame_N_normal.hdr`), so the images line up pixel for pixel.
+### Tilt
+
+The drone model sits on its own pivot that pitches and rolls with your inputs, smoothed with FInterp To. The collision box doesn't tilt, so tilting never changes how the drone collides with things.
+
+### Camera and HUD
+
+A Scene Capture 2D on the front of the drone renders to a Render Target, and that feed shows up in the top-right corner of the HUD. The HUD also shows the drone's X/Y/Z position in meters, pitch/roll/yaw in degrees, speed in m/s, and which camera view is active.
+
+### Waypoint autopilot (P)
+
+You place BP_Waypoint actors in the level and give each one an Index (the order to visit them in) and a Label. When the autopilot starts, it loads the waypoints and flies to them one at a time. For each one it figures out where the waypoint is compared to the drone, then uses Map Range Clamped to set the yaw, forward, sideways and up/down inputs. The drone turns toward the waypoint, flies to it, slows down as it gets close, hovers there for the waypoint's HoverDuration, and lands after the last one. Waypoints can also show a ring for the drone to fly through.
+
+### Position log
+
+While a mission is running, LogPosition writes a line like `POSLOG,time,waypoint,x,y,z` (in meters) to the log every 0.5 seconds and again at each waypoint.
+
+### RRT path planning (O)
+
+BuildTree grows a Rapidly-exploring Random Tree from the drone toward BP_Goal. Each step picks a random point (and sometimes picks the goal itself), finds the closest node already in the tree (FindNearest), and takes one step from that node toward the point. The step only gets added if a drone-sized sphere trace along it doesn't hit anything (IsPathClear). The tree stops growing once a node has a clear line to the goal. If it doesn't find a path, it tries again, up to 5 times.
+
+ExtractPath then walks back through the parent links from the goal to the start to get the path. SmoothPath cleans it up by skipping ahead to the farthest point it can reach in a straight line, which gets rid of the extra zigzags.
+
+Finally, BuildPathWaypoints spawns hidden waypoints along the smoothed path, and the autopilot flies them.
+
+The debug lines are color coded: green is the tree, red is the raw path, and blue is the smoothed path.
+
+### LiDAR (BP_Lidar)
+
+BP_Lidar is a component on the drone that runs a scan every 0.1 seconds on a timer. A scan fires line traces in 16 vertical channels and 90 horizontal steps (every 4°, all the way around), each going out up to 50 m. Hits get drawn as red points and saved in ScanPoints. Every 10th scan, the scan number, the drone's position and rotation, and all the hit points are written to the log on one line.
+
+### Multimodal capture (F)
+
+There's a SensorRig on the front of the drone with three Scene Capture cameras in the exact same spot with the same field of view: RGB (Cam_RGB), depth (Cam_Depth, distance in cm) and surface normals (Cam_Normal). They only capture when you press F. CaptureFrame grabs all three in the same frame and saves them to `Saved/Captures/` with the same frame number (`frame_N_rgb.png`, `frame_N_depth.hdr`, `frame_N_normal.hdr`), so the three images line up pixel for pixel.
 
 ## Data scripts
 
-Run these from the project folder (next to the `.uproject` file) after playing:
+Run these from the project folder (the one with the `.uproject` file) after you've played the game:
 
-| Script | Output |
+| Script | What it makes |
 |---|---|
-| `python extract_poslog.py` | `position_log.csv`: drone position during missions |
-| `python extract_lidar.py` | `lidar_scans.csv`: one row per LiDAR hit point, with the drone's pose |
-| `python fix_capture_alpha.py` | Viewable copies of the RGB captures (`*_rgb_fixed.png`); needs `pip install pillow` |
-| `build_rrt_course.py` | Run inside Unreal (Tools → Execute Python Script) to build an RRT obstacle course |
+| `python extract_poslog.py` | `position_log.csv`, the drone's position during missions |
+| `python extract_lidar.py` | `lidar_scans.csv`, one row per LiDAR hit with the drone's pose |
+| `python fix_capture_alpha.py` | Viewable copies of the RGB captures (`*_rgb_fixed.png`). Needs `pip install pillow` first |
+| `build_rrt_course.py` | Run this one inside Unreal (Tools → Execute Python Script) to build an RRT obstacle course |
